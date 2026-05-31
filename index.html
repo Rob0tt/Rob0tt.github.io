@@ -621,6 +621,14 @@
             font-size: 0.85em;
         }
 
+        h4 {
+            color: var(--primary-light);
+            font-size: 0.85em;
+            margin-bottom: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
         @keyframes fadeInDown {
             from {
                 opacity: 0;
@@ -1400,6 +1408,7 @@
                     <button class="tab-btn" onclick="switchTab('losses')">Losses</button>
                     <button class="tab-btn" onclick="switchTab('loot')">Loot Breakdown</button>
                     <button class="tab-btn" onclick="switchTab('pilots')">Pilots</button>
+                    <button class="tab-btn" onclick="switchTab('stats')">Fleet Stats</button>
                     <button class="tab-btn" onclick="switchTab('manual')">Manual Entry</button>
                     <button class="tab-btn" onclick="switchTab('sessions')">Sessions</button>
                 </div>
@@ -1472,6 +1481,15 @@
                     </div>
 
                     <div id="pilotsList"></div>
+                </div>
+
+                <!-- FLEET STATS TAB -->
+                <div id="stats" class="tab-content">
+                    <h3 style="color: var(--primary-light); margin-bottom: 15px; text-transform: uppercase; border-bottom: 1px solid var(--primary); padding-bottom: 10px;">Operation Statistics</h3>
+                    
+                    <div id="fleetStatsContainer">
+                        <div class="empty-state">Add kills and losses to see statistics</div>
+                    </div>
                 </div>
 
                 <!-- MANUAL ENTRY TAB -->
@@ -1645,6 +1663,7 @@
             // Refresh tab-specific content
             if (tabName === 'loot') updateLootBreakdown();
             if (tabName === 'pilots') updatePilotsList();
+            if (tabName === 'stats') updateFleetStats();
             if (tabName === 'sessions') updateSessionsList();
         }
 
@@ -1677,65 +1696,106 @@
             const messageContainer = document.getElementById('messageContainer');
             messageContainer.innerHTML = '<div class="loading">⟳ Fetching killmail data...</div>';
 
-            // Use CORS proxy to avoid blocking
-            const corsProxy = 'https://api.allorigins.win/raw?url=';
+            // Try multiple CORS proxies in sequence
+            const proxies = [
+                {
+                    name: 'allorigins',
+                    url: (api) => `https://api.allorigins.win/raw?url=${encodeURIComponent(api)}`
+                },
+                {
+                    name: 'corsproxy.io',
+                    url: (api) => `https://corsproxy.io/?${encodeURIComponent(api)}`
+                },
+                {
+                    name: 'direct',
+                    url: (api) => api
+                }
+            ];
+
             const apiUrl = `https://zkillboard.com/api/killID/${killID}/`;
-            const proxyUrl = corsProxy + encodeURIComponent(apiUrl);
+            let proxyIndex = 0;
 
-            fetch(proxyUrl)
-                .then(response => {
-                    if (!response.ok) throw new Error('Killmail not found');
-                    return response.json();
-                })
-                .then(data => {
-                    if (!data || data.length === 0) {
-                        showMessage('Killmail not found. Try manual entry.', 'error');
-                        messageContainer.innerHTML = '';
-                        return;
-                    }
-
-                    const kill = data[0];
-                    const victim = kill.victim;
-                    const items = kill.items || [];
-
-                    let totalLoot = 0;
-                    let lootItems = [];
-                    
-                    items.forEach(item => {
-                        if (item.flag !== 0) {
-                            const itemValue = item.total_price || 0;
-                            totalLoot += itemValue;
-                            lootItems.push({
-                                name: item.item_name || 'Unknown',
-                                qty: item.qty_destroyed || item.qty_dropped || 1,
-                                value: itemValue
-                            });
-                        }
-                    });
-
-                    const shipValue = victim.ship_value || 0;
-                    const totalValue = totalLoot + shipValue;
-
-                    const killObj = {
-                        id: killID,
-                        timestamp: new Date().toLocaleTimeString(),
-                        date: new Date().toLocaleDateString(),
-                        victim: victim.character_name || 'Unknown',
-                        ship: victim.ship_name || 'Unknown',
-                        value: totalValue,
-                        loot: totalLoot,
-                        items: lootItems,
-                        location: kill.solar_system_name || 'Unknown'
-                    };
-
-                    kills.push(killObj);
-                    updateDisplay();
-                    showMessage(`✓ Kill added: ${killObj.victim} (${killObj.ship})`, 'success');
-                })
-                .catch(error => {
-                    showMessage(`Error fetching killmail: ${error.message}. Try manual entry.`, 'error');
+            function tryFetch() {
+                if (proxyIndex >= proxies.length) {
+                    showMessage('Could not fetch killmail. Try the kill ID only (numbers), or use Manual Entry tab.', 'error');
                     messageContainer.innerHTML = '';
-                });
+                    return;
+                }
+
+                const proxy = proxies[proxyIndex];
+                const fetchUrl = proxy.url(apiUrl);
+
+                console.log(`Trying proxy: ${proxy.name}`);
+
+                fetch(fetchUrl, { 
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'application/json'
+                    }
+                })
+                    .then(response => {
+                        if (!response.ok) {
+                            console.log(`Proxy ${proxy.name} failed: ${response.status}`);
+                            proxyIndex++;
+                            tryFetch();
+                            return;
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        if (!data || (Array.isArray(data) && data.length === 0)) {
+                            showMessage('Kill not found on zkillboard. Check the ID or use Manual Entry.', 'error');
+                            messageContainer.innerHTML = '';
+                            return;
+                        }
+
+                        const kill = Array.isArray(data) ? data[0] : data;
+                        const victim = kill.victim;
+                        const items = kill.items || [];
+
+                        let totalLoot = 0;
+                        let lootItems = [];
+                        
+                        items.forEach(item => {
+                            if (item.flag !== 0) {
+                                const itemValue = item.total_price || 0;
+                                totalLoot += itemValue;
+                                lootItems.push({
+                                    name: item.item_name || 'Unknown',
+                                    qty: item.qty_destroyed || item.qty_dropped || 1,
+                                    value: itemValue
+                                });
+                            }
+                        });
+
+                        const shipValue = victim.ship_value || 0;
+                        const totalValue = totalLoot + shipValue;
+
+                        const killObj = {
+                            id: killID,
+                            timestamp: new Date().toLocaleTimeString(),
+                            date: new Date().toLocaleDateString(),
+                            victim: victim.character_name || 'Unknown',
+                            ship: victim.ship_name || 'Unknown',
+                            value: totalValue,
+                            loot: totalLoot,
+                            items: lootItems,
+                            location: kill.solar_system_name || 'Unknown'
+                        };
+
+                        kills.push(killObj);
+                        updateDisplay();
+                        messageContainer.innerHTML = '';
+                        showMessage(`✓ Kill added: ${killObj.victim} (${killObj.ship})`, 'success');
+                    })
+                    .catch(error => {
+                        console.log(`Proxy ${proxy.name} error:`, error.message);
+                        proxyIndex++;
+                        tryFetch();
+                    });
+            }
+
+            tryFetch();
         }
 
         function removeKill(index) {
@@ -1837,6 +1897,156 @@
                     </div>
                 `;
             });
+
+            container.innerHTML = html;
+        }
+
+        // ===== FLEET STATS =====
+        function updateFleetStats() {
+            const container = document.getElementById('fleetStatsContainer');
+            
+            if (kills.length === 0 && losses.length === 0) {
+                container.innerHTML = '<div class="empty-state">Add kills and losses to see statistics</div>';
+                return;
+            }
+
+            const totalKillValue = kills.reduce((sum, k) => sum + k.value, 0);
+            const totalLossValue = losses.reduce((sum, l) => sum + l.value, 0);
+            const netProfit = totalKillValue - totalLossValue;
+            
+            const killCount = kills.length;
+            const lossCount = losses.length;
+            const totalEngagements = killCount + lossCount;
+            
+            // Efficiency calculations
+            const winRate = killCount > 0 ? ((killCount / totalEngagements) * 100).toFixed(1) : 0;
+            const killEfficiency = (totalKillValue / (totalKillValue + totalLossValue) * 100).toFixed(1);
+            const avgKillValue = killCount > 0 ? Math.floor(totalKillValue / killCount) : 0;
+            const avgLossValue = lossCount > 0 ? Math.floor(totalLossValue / lossCount) : 0;
+            
+            // Find best and worst
+            const bestKill = kills.length > 0 ? kills.reduce((best, k) => k.value > best.value ? k : best) : null;
+            const worstLoss = losses.length > 0 ? losses.reduce((worst, l) => l.value > worst.value ? l : worst) : null;
+            
+            // Ship statistics
+            const shipKills = {};
+            kills.forEach(k => {
+                shipKills[k.ship] = (shipKills[k.ship] || 0) + 1;
+            });
+            const topShip = Object.entries(shipKills).sort((a, b) => b[1] - a[1])[0];
+            
+            const shipLosses = {};
+            losses.forEach(l => {
+                shipLosses[l.ship] = (shipLosses[l.ship] || 0) + 1;
+            });
+            const topLoss = Object.entries(shipLosses).sort((a, b) => b[1] - a[1])[0];
+
+            let html = `
+                <div class="stat-row">
+                    <div class="mini-stat">
+                        <div class="mini-stat-label">Win Rate</div>
+                        <div class="mini-stat-value">${winRate}%</div>
+                    </div>
+                    <div class="mini-stat">
+                        <div class="mini-stat-label">Total Engagements</div>
+                        <div class="mini-stat-value">${totalEngagements}</div>
+                    </div>
+                </div>
+
+                <div class="stat-row">
+                    <div class="mini-stat">
+                        <div class="mini-stat-label">ISK Efficiency</div>
+                        <div class="mini-stat-value" style="color: var(--success);">${killEfficiency}%</div>
+                    </div>
+                    <div class="mini-stat">
+                        <div class="mini-stat-label">Net Profit</div>
+                        <div class="mini-stat-value" style="color: var(--success);">${formatISK(netProfit)}</div>
+                    </div>
+                </div>
+
+                <div class="stat-row">
+                    <div class="mini-stat">
+                        <div class="mini-stat-label">Avg Kill Value</div>
+                        <div class="mini-stat-value">${formatISK(avgKillValue)}</div>
+                    </div>
+                    <div class="mini-stat">
+                        <div class="mini-stat-label">Avg Loss Value</div>
+                        <div class="mini-stat-value" style="color: var(--danger);">${formatISK(avgLossValue)}</div>
+                    </div>
+                </div>
+
+                <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--primary);">
+                    <h4 style="color: var(--primary-light); margin-bottom: 12px; font-size: 0.85em;">BEST & WORST</h4>
+            `;
+
+            if (bestKill) {
+                html += `
+                    <div class="kill-item">
+                        <div class="kill-info">
+                            <div class="kill-name">🏆 Best Kill</div>
+                            <div class="kill-details">${bestKill.victim} (${bestKill.ship})</div>
+                        </div>
+                        <div class="kill-isk high">${formatISK(bestKill.value)}</div>
+                    </div>
+                `;
+            }
+
+            if (worstLoss) {
+                html += `
+                    <div class="loss-item">
+                        <div class="kill-info">
+                            <div class="kill-name">💔 Worst Loss</div>
+                            <div class="kill-details">${worstLoss.ship} (${worstLoss.pilot})</div>
+                        </div>
+                        <div class="loss-value">${formatISK(worstLoss.value)}</div>
+                    </div>
+                `;
+            }
+
+            html += `
+                </div>
+
+                <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--primary);">
+                    <h4 style="color: var(--primary-light); margin-bottom: 12px; font-size: 0.85em;">MOST COMMON SHIPS</h4>
+            `;
+
+            if (topShip) {
+                html += `
+                    <div class="pilot-item" style="justify-content: space-between;">
+                        <div class="pilot-name">Most Killed: ${topShip[0]}</div>
+                        <div class="pilot-kills">${topShip[1]} kills</div>
+                    </div>
+                `;
+            }
+
+            if (topLoss) {
+                html += `
+                    <div class="pilot-item" style="justify-content: space-between; border-left-color: var(--danger);">
+                        <div class="pilot-name" style="color: var(--danger);">Most Lost: ${topLoss[0]}</div>
+                        <div class="pilot-kills">${topLoss[1]} losses</div>
+                    </div>
+                `;
+            }
+
+            html += `
+                </div>
+
+                <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--primary);">
+                    <h4 style="color: var(--primary-light); margin-bottom: 12px; font-size: 0.85em;">VALUE BREAKDOWN</h4>
+                    <div class="stat-row full">
+                        <div class="mini-stat">
+                            <div class="mini-stat-label">Total Kills Value</div>
+                            <div class="mini-stat-value" style="color: var(--success);">${formatISK(totalKillValue)}</div>
+                        </div>
+                    </div>
+                    <div class="stat-row full">
+                        <div class="mini-stat">
+                            <div class="mini-stat-label">Total Losses Value</div>
+                            <div class="mini-stat-value" style="color: var(--danger);">${formatISK(totalLossValue)}</div>
+                        </div>
+                    </div>
+                </div>
+            `;
 
             container.innerHTML = html;
         }
@@ -2157,5 +2367,9 @@
 
         updateDisplay();
     </script>
+
+    <footer style="margin-top: 40px; padding-top: 20px; border-top: 2px solid var(--primary); text-align: center; color: var(--text-muted); font-size: 0.8em;">
+        <p>zKillboard Loot Tracker v2.1 | <a href="https://github.com/rob0tt/eve-loot-tracker" target="_blank" style="color: var(--primary); text-decoration: none;">GitHub</a> | Made for EVE Online</p>
+    </footer>
 </body>
 </html>
