@@ -1677,7 +1677,12 @@
             const messageContainer = document.getElementById('messageContainer');
             messageContainer.innerHTML = '<div class="loading">⟳ Fetching killmail data...</div>';
 
-            fetch(`https://zkillboard.com/api/killID/${killID}/`)
+            // Use CORS proxy to avoid blocking
+            const corsProxy = 'https://api.allorigins.win/raw?url=';
+            const apiUrl = `https://zkillboard.com/api/killID/${killID}/`;
+            const proxyUrl = corsProxy + encodeURIComponent(apiUrl);
+
+            fetch(proxyUrl)
                 .then(response => {
                     if (!response.ok) throw new Error('Killmail not found');
                     return response.json();
